@@ -150,6 +150,8 @@ def main():
             # Absolute positions
             pred_abs   = samples_np + last_obs_np[np.newaxis, :, :, np.newaxis, :]
             target_abs = target_np  + last_obs_np[:, :, np.newaxis, :]
+            pred_abs   = np.clip(pred_abs,   0.0, 1.0)  # vessels can't leave San Diego
+            target_abs = np.clip(target_abs, 0.0, 1.0)
 
             # Denormalise to degrees
             pred_lat,  pred_lon  = denorm_to_degrees(pred_abs[..., 0],   pred_abs[..., 1])
