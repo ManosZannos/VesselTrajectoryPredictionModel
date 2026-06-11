@@ -66,25 +66,25 @@ def run_epoch(loader, model, optimizer, device, args, train: bool):
     n_batches  = 0
 
     for batch in loader:
-        # S&F collate_function returns tensors with shapes:
-        #   ip:           [B, N, T_obs, feature_size]
-        #   op:           [B, N, T_pred, 2]
-        #   dist/bear/hdg [B, N, N, T_obs]
-        #   ip_mask:      [B, N] bool
-        #   op_mask:      [B, N] bool
-        #   vessel_count: [B]
+        # Unpack batch from collate_function
         (ip, op, dist_matrix, bear_matrix, hdg_matrix,
-         ip_mask, op_mask, vessel_count) = [t.to(device) for t in batch]
+         _ip_mask, _op_mask, vessel_count) = [t.to(device) for t in batch]
 
-        # Model expects [B, T_obs, N, F] — transpose from [B, N, T_obs, F]
-        obs_seq = ip.permute(0, 2, 1, 3)   # [B, T_obs, N, F]
+        # Build reliable vessel mask from vessel_count
+        # (ip_mask/op_mask from data.py may have wrong shape)
+        N = ip.shape[1]
+        v_idx = torch.arange(N, device=device).unsqueeze(0)    # [1, N]
+        vessel_mask = v_idx < vessel_count.long().unsqueeze(1)  # [B, N] bool
 
-        # Displacement target: op - last observed position
-        last_obs    = ip[:, :, -1, :2]            # [B, N, 2]
-        target_disp = op[..., :2] - last_obs.unsqueeze(2)  # [B, N, T_pred, 2]
+        # Model expects [B, T_obs, N, F]
+        obs_seq = ip.permute(0, 2, 1, 3)                        # [B, T_obs, N, F]
 
-        gmm_params, _ = model(obs_seq, ip_mask=ip_mask, op_mask=op_mask)
-        loss = gmm_nll(gmm_params, target_disp, op_mask, K=args.K)
+        # Displacement target (LAT/LON only)
+        last_obs    = ip[:, :, -1, :2]                          # [B, N, 2]
+        target_disp = op[..., :2] - last_obs.unsqueeze(2)       # [B, N, T_pred, 2]
+
+        gmm_params, _ = model(obs_seq, ip_mask=vessel_mask, op_mask=vessel_mask)
+        loss = gmm_nll(gmm_params, target_disp, vessel_mask, K=args.K)
 
         if train:
             optimizer.zero_grad()
