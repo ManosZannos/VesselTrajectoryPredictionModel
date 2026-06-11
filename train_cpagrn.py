@@ -42,6 +42,7 @@ def get_args():
     p = argparse.ArgumentParser(description='Train CPA-GRN')
 
     # Data (must match S&F preprocessing)
+    p.add_argument('--split_data', action='store_true', default=False)
     p.add_argument('--zone',             type=int,   default=11)
     p.add_argument('--sequence_length',  type=int,   default=5,
                    help='Observation length (minutes)')
