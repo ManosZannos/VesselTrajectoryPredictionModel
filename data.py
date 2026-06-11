@@ -190,8 +190,8 @@ def load_data(data_dir, args):
 		torch.save(testdataset,test_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length))	
 	else:
 		traindataset = torch.load(train_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length),weights_only=False)
-		validdataset = torch.load(val_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length))
-		testdataset = torch.load(test_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length)) 
+		validdataset = torch.load(val_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length),weights_only=False)
+		testdataset = torch.load(test_dir+"%02d_%02d.pt"%(args.sequence_length,args.prediction_length),weights_only=False) 
 	return traindataset, validdataset, testdataset
 
 
