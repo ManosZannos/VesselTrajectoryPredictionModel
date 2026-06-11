@@ -73,7 +73,7 @@ class trajectory_dataset(Dataset):
 		valid_vessels = [v for v in frame['MMSI'].unique() if not \
 		abs(frame.loc[frame['MMSI']==v]['LAT'].diff()).max()<(1e-04) \
 		and not abs(frame.loc[frame['MMSI']==v]['LON'].diff()).max()<(1e-04) and len(frame.loc[frame['MMSI']==v])==self.sequence_length]
-		if (len(valid_vessels)<total_vessels) or total_vessels<=3:
+		if len(valid_vessels) <= 3:
 			condition_satisfied=False
 		return condition_satisfied,total_vessels
 	def get_sequence(self,frame):
