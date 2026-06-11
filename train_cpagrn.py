@@ -81,7 +81,7 @@ def run_epoch(loader, model, optimizer, device, args, train: bool):
 
         # Displacement target: op - last observed position
         last_obs    = ip[:, :, -1, :2]            # [B, N, 2]
-        target_disp = op - last_obs.unsqueeze(2)  # [B, N, T_pred, 2]
+        target_disp = op[..., :2] - last_obs.unsqueeze(2)  # [B, N, T_pred, 2]
 
         gmm_params, _ = model(obs_seq, ip_mask=ip_mask, op_mask=op_mask)
         loss = gmm_nll(gmm_params, target_disp, op_mask, K=args.K)
