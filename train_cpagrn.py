@@ -168,7 +168,7 @@ def main():
     # ── Data (reuses S&F pipeline exactly) ────────────────────────────
     data_dir = f'data/{args.zone:02d}/'
     assert os.path.isdir(data_dir), f'Data directory not found: {data_dir}. Run grid.py first.'
-    train_ds, val_ds, _ = load_data(args, data_dir)
+    train_ds, val_ds, _ = load_data(data_dir, args)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size,
                               shuffle=True,  num_workers=2, pin_memory=True)
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size,
