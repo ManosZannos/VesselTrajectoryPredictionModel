@@ -3,16 +3,15 @@ evaluate_cpagrn.py — Evaluation for CPA-GRN.
 
 Reports:
   - minADE-20 and FDE in degrees
-  - ADE per prediction horizon (1min … 5min)
-  - ADE in nautical miles (comparison with S&F)
+  - ADE per prediction horizon (1min … pred_len min)
+  - ADE in nautical miles (for comparison with S&F)
 
 Run:
-    python evaluate_cpagrn.py --tag CPA_GRN_v1 --split test
+    python evaluate_cpagrn.py --tag CPA_GRN_v1 --split test --gpu_num 0
 """
 
 from __future__ import annotations
 import os
-import sys
 import argparse
 import math
 
@@ -21,7 +20,7 @@ import numpy as np
 
 from data import load_data, collate_function
 from utils import seed_everything
-from geographic_utils import min_lat, max_lat, min_lon, max_lon  # in radians
+from geographic_utils import min_lat, max_lat, min_lon, max_lon  # radians
 from model_cpagrn import CPAGRN, sample_trajectories
 
 seed_everything(100)
@@ -35,8 +34,9 @@ NM_PER_DEGREE = 60.0  # approximation valid near 32°N
 
 def denorm_to_degrees(lat_norm: np.ndarray, lon_norm: np.ndarray):
     """
-    Reverse data.py normalisation: norm = (rad - min_rad)/(max_rad - min_rad)
-    min_lat/max_lat/min_lon/max_lon are in radians (geographic_utils.py).
+    Reverse data.py normalisation.
+    data.py: converts degrees→radians, then min-max normalises.
+    min_lat/max_lat/min_lon/max_lon from geographic_utils are in radians.
     """
     lat_rad = lat_norm * (max_lat - min_lat) + min_lat
     lon_rad = lon_norm * (max_lon - min_lon) + min_lon
@@ -81,26 +81,28 @@ def main():
     # ── Load checkpoint ───────────────────────────────────────────────
     ckpt_path = os.path.join('checkpoints', args.tag, 'val_best.pth')
     assert os.path.exists(ckpt_path), f'Checkpoint not found: {ckpt_path}'
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-    saved_args = ckpt.get('args', {})
-    print(f'Loaded epoch {ckpt["epoch"]}  val_loss={ckpt.get("val_loss", "n/a"):.6f}')
+    ckpt      = torch.load(ckpt_path, map_location=device, weights_only=False)
+    saved     = ckpt.get('args', {})
+    print(f'Loaded epoch {ckpt["epoch"]}  val_loss={ckpt.get("val_loss", "?"):.6f}')
 
-    # ── Model ─────────────────────────────────────────────────────────
+    # ── Rebuild model ─────────────────────────────────────────────────
     model = CPAGRN(
-        feature_size = saved_args.get('feature_size',       4),
-        d_model      = saved_args.get('d_model',            64),
-        gru_layers   = saved_args.get('gru_layers',         2),
-        K            = saved_args.get('K',                  3),
-        pred_len     = saved_args.get('prediction_length',  5),
+        feature_size = saved.get('feature_size',       4),
+        d_model      = saved.get('d_model',            64),
+        gru_layers   = saved.get('gru_layers',         2),
+        K            = saved.get('K',                  3),
+        pred_len     = saved.get('prediction_length',  5),
         dropout      = 0.0,
     ).to(device)
     model.load_state_dict(ckpt['model'])
     model.eval()
 
-    K = saved_args.get('K', 3)
+    K = saved.get('K', 3)
 
     # ── Data ──────────────────────────────────────────────────────────
     data_dir = f'data/{args.zone:02d}/'
+    assert os.path.isdir(data_dir), f'Missing: {data_dir}'
+
     train_ds, val_ds, test_ds = load_data(data_dir, args)
     eval_ds = test_ds if args.split == 'test' else val_ds
 
@@ -108,7 +110,7 @@ def main():
         eval_ds, batch_size=args.batch_size,
         shuffle=False, collate_fn=collate_function(), num_workers=0
     )
-    print(f'Evaluating on {args.split} set ({len(eval_ds)} samples)')
+    print(f'Evaluating on {args.split} set  ({len(eval_ds)} samples)')
 
     # ── Evaluation loop ───────────────────────────────────────────────
     T = args.prediction_length
@@ -117,35 +119,35 @@ def main():
 
     with torch.no_grad():
         for batch in loader:
-            # Batch shapes (after collate_function):
-            #   ip:      [B, N, T_obs, F]
-            #   op:      [B, N, T_pred, 2]
-            #   ip_mask: [B, N] bool
-            #   op_mask: [B, N] bool
+            # Unpack — same approach as training
             (ip, op, dist_matrix, bear_matrix, hdg_matrix,
-             ip_mask, op_mask, vessel_count) = [t.to(device) for t in batch]
+             _ip_mask, _op_mask, vessel_count) = [t.to(device) for t in batch]
 
-            # Model expects [B, T_obs, N, F]
-            obs_seq = ip.permute(0, 2, 1, 3)              # [B, T_obs, N, F]
+            # Reliable vessel mask from vessel_count
+            N     = ip.shape[1]
+            v_idx = torch.arange(N, device=device).unsqueeze(0)
+            vessel_mask = v_idx < vessel_count.long().unsqueeze(1)  # [B, N]
 
-            # Displacement target
-            last_obs    = ip[:, :, -1, :2]                # [B, N, 2]
-            target_disp = op - last_obs.unsqueeze(2)      # [B, N, T_pred, 2]
+            # Model input
+            obs_seq     = ip.permute(0, 2, 1, 3)          # [B, T_obs, N, F]
+            last_obs    = ip[:, :, -1, :2]                 # [B, N, 2]
+            target_disp = op[..., :2] - last_obs.unsqueeze(2)  # [B, N, T, 2]
 
             # Forward + sample
-            gmm_params, _ = model(obs_seq, ip_mask=ip_mask, op_mask=op_mask)
-            traj_samples  = sample_trajectories(gmm_params, n_samples=args.n_samples, K=K)
-            # traj_samples: [n_samples, B, N, T_pred, 2]  — displacements
+            gmm_params, _ = model(obs_seq, ip_mask=vessel_mask)
+            traj_samples  = sample_trajectories(
+                gmm_params, n_samples=args.n_samples, K=K
+            )  # [n_samples, B, N, T, 2]
 
-            # Numpy conversion
-            last_obs_np  = last_obs.cpu().numpy()          # [B, N, 2]
-            target_np    = target_disp.cpu().numpy()        # [B, N, T_pred, 2]
-            samples_np   = traj_samples.cpu().numpy()       # [S, B, N, T_pred, 2]
-            mask_np      = op_mask.cpu().numpy()            # [B, N]
+            # To numpy
+            last_obs_np = last_obs.cpu().numpy()          # [B, N, 2]
+            target_np   = target_disp.cpu().numpy()        # [B, N, T, 2]
+            samples_np  = traj_samples.cpu().numpy()       # [S, B, N, T, 2]
+            mask_np     = vessel_mask.cpu().numpy()        # [B, N]
 
-            B, N = mask_np.shape
+            B = mask_np.shape[0]
 
-            # Absolute positions: disp + last_obs
+            # Absolute positions
             pred_abs   = samples_np + last_obs_np[np.newaxis, :, :, np.newaxis, :]
             target_abs = target_np  + last_obs_np[:, :, np.newaxis, :]
 
@@ -153,13 +155,13 @@ def main():
             pred_lat,  pred_lon  = denorm_to_degrees(pred_abs[..., 0],   pred_abs[..., 1])
             true_lat,  true_lon  = denorm_to_degrees(target_abs[..., 0], target_abs[..., 1])
 
-            # Per-vessel minADE-20
+            # minADE-20 per vessel per horizon
             for b in range(B):
                 for n in range(N):
                     if not mask_np[b, n]:
                         continue
 
-                    err = l2_degrees(
+                    err  = l2_degrees(
                         pred_lat[:, b, n, :], pred_lon[:, b, n, :],
                         true_lat[b, n, :],    true_lon[b, n, :],
                     )  # [n_samples, T]
@@ -185,8 +187,8 @@ def main():
     print('=' * 55)
     print(f'\n  S&F paper ADE : 0.03314 nm')
     print(f'  Ours      ADE : {overall_ade*NM_PER_DEGREE:.5f} nm')
-    improvement = (0.03314 - overall_ade * NM_PER_DEGREE) / 0.03314 * 100
-    print(f'  vs S&F        : {improvement:+.1f}%')
+    delta = (0.03314 - overall_ade * NM_PER_DEGREE) / 0.03314 * 100
+    print(f'  vs S&F        : {delta:+.1f}%')
     print('=' * 55)
 
 
