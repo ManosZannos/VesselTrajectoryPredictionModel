@@ -272,8 +272,11 @@ def gmm_nll(
     log_sy  = params[..., 4]
     rho     = torch.tanh(params[..., 5])
 
-    sx  = torch.exp(log_sx).clamp(min=1e-4)
-    sy  = torch.exp(log_sy).clamp(min=1e-4)
+    # Clamp log_sigma to prevent pathological variances (sigma in [4.5e-5, 7.4])
+    log_sx = log_sx.clamp(-10.0, 2.0)
+    log_sy = log_sy.clamp(-10.0, 2.0)
+    sx  = torch.exp(log_sx)
+    sy  = torch.exp(log_sy)
     rho = rho.clamp(-0.99, 0.99)
 
     dx = target_disp[..., 0:1] - mu_x                   # [B,N,T,K]
@@ -335,8 +338,8 @@ def sample_trajectories(
         log_sy = params[..., 4].gather(-1, c).squeeze(-1)
         rho    = torch.tanh(params[..., 5].gather(-1, c).squeeze(-1))
 
-        sx  = torch.exp(log_sx).clamp(min=1e-4)
-        sy  = torch.exp(log_sy).clamp(min=1e-4)
+        sx  = torch.exp(log_sx.clamp(-10.0, 2.0))
+        sy  = torch.exp(log_sy.clamp(-10.0, 2.0))
         rho = rho.clamp(-0.99, 0.99)
 
         # Sample bivariate Gaussian
